@@ -421,7 +421,7 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     if (isEB) { ebBT+=rec.beforeTax; ebTx+=rec.tax; ebTot+=rec.total; }
     else      { eeBT+=rec.beforeTax; eeTx+=rec.tax; eeTot+=rec.total; }
     [i+1, fmtDt(rec.dt), rec.plate, rec.inv, label,
-     rec.beforeTax, rec.tax, rec.total].forEach((v,ci) => {
+     rec.beforeTax, rec.tax, `=F${r}+G${r}`].forEach((v,ci) => {
       sc(r,ci+1,v,{
         bold: isEB,
         align: ci>=5?'right': ci===4?'left':'center',
@@ -431,13 +431,13 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     r++;
   }
 
-  // ── Table 1 รวม (ไม่มีขอบ, F-H ตัวหนา)
+  // ── Table 1 รวม: A-E ว่าง, F-H ตัวหนา+ขอบ
   const t1End=r-1, t1TotalRow=r;
-  for (let ci=0; ci<5; ci++) sc(t1TotalRow,ci+1,'-',{ border:false, align:'center' });
+  for (let ci=0; ci<5; ci++) sc(t1TotalRow,ci+1,'',{ border:false });
   [`=SUM(F${t1DataStart}:F${t1End})`,
    `=SUM(G${t1DataStart}:G${t1End})`,
    `=SUM(H${t1DataStart}:H${t1End})`].forEach((v,ci) => {
-    sc(t1TotalRow,ci+6,v,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
+    sc(t1TotalRow,ci+6,v,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
   });
   rowHeights[t1TotalRow-1] = { hpt:20 };
   r++;
@@ -459,9 +459,9 @@ function buildSheet(plate, records, pdfExtras, taxId) {
       const it = pdfExtras[i];
       t2BT  += it.total;
       t2Tot += it.total;
-      // INV = ชื่อด่าน, รายการ = "ด่านไม่มีใบกำกับภาษี", ภาษี = ว่าง
+      // INV = ชื่อด่าน, รายการ = "ด่านไม่มีใบกำกับภาษี", ภาษี = ว่าง, รวม = F (ไม่มีภาษี)
       [i+1, it.dateStr, plate, it.location,
-       'ด่านไม่มีใบกำกับภาษี', it.total, '', it.total].forEach((v,ci) => {
+       'ด่านไม่มีใบกำกับภาษี', it.total, '', `=F${r}`].forEach((v,ci) => {
         sc(r,ci+1,v,{
           align: ci>=5?'right': ci===4?'left':'center',
           numFmt: (ci===5||ci===7)?NUM_FMT:undefined,
@@ -472,13 +472,13 @@ function buildSheet(plate, records, pdfExtras, taxId) {
       r++;
     }
 
-    // Table 2 รวม (ไม่มีขอบ, F และ H ตัวหนา, G = -)
+    // Table 2 รวม: A-E ว่าง, F+H ตัวหนา+ขอบ, G ว่าง+ขอบ
     const t2End=r-1;
     t2TotalRow=r;
-    for (let ci=0; ci<5; ci++) sc(t2TotalRow,ci+1,'-',{ border:false, align:'center' });
-    sc(t2TotalRow,6,`=SUM(F${t2DataStart}:F${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
-    sc(t2TotalRow,7,'-',{ border:false, align:'center' });
-    sc(t2TotalRow,8,`=SUM(H${t2DataStart}:H${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
+    for (let ci=0; ci<5; ci++) sc(t2TotalRow,ci+1,'',{ border:false });
+    sc(t2TotalRow,6,`=SUM(F${t2DataStart}:F${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
+    sc(t2TotalRow,7,'',{ medium:true });
+    sc(t2TotalRow,8,`=SUM(H${t2DataStart}:H${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
     rowHeights[t2TotalRow-1] = { hpt:16 };
     r++;
   }
@@ -494,10 +494,10 @@ function buildSheet(plate, records, pdfExtras, taxId) {
 
   function numOrDash(v) { return v ? v : '-'; }
 
-  // แถว ทางด่วนและรถไฟฟ้า
+  // แถว ทางด่วนและรถไฟฟ้า (E-H มีขอบบาง)
   const rowEB = r;
   for(let c=1;c<=4;c++) sc(r,c,'',{border:false});
-  sc(r,5,'ทางด่วนและรถไฟฟ้า',{ bold:true, align:'left' });
+  sc(r,5,'ทางด่วนและรถไฟฟ้า',{ align:'left' });
   sc(r,6, numOrDash(ebBT),  { align:'right', numFmt: ebBT  ? NUM_FMT : undefined });
   sc(r,7, numOrDash(ebTx),  { align:'right', numFmt: ebTx  ? NUM_FMT : undefined });
   sc(r,8, numOrDash(ebTot), { align:'right', numFmt: ebTot ? NUM_FMT : undefined });
@@ -506,7 +506,7 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   // แถว การทางพิเศษฯ
   const rowEE = r;
   for(let c=1;c<=4;c++) sc(r,c,'',{border:false});
-  sc(r,5,'การทางพิเศษฯ',{ bold:true, align:'left' });
+  sc(r,5,'การทางพิเศษฯ',{ align:'left' });
   sc(r,6, numOrDash(eeBT),  { align:'right', numFmt: eeBT  ? NUM_FMT : undefined });
   sc(r,7, numOrDash(eeTx),  { align:'right', numFmt: eeTx  ? NUM_FMT : undefined });
   sc(r,8, numOrDash(eeTot), { align:'right', numFmt: eeTot ? NUM_FMT : undefined });
@@ -515,17 +515,17 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   // แถว ด่านไม่มีใบกำกับภาษี
   const rowT2 = r;
   for(let c=1;c<=4;c++) sc(r,c,'',{border:false});
-  sc(r,5,'ด่านไม่มีใบกำกับภาษี',{ bold:true, align:'left' });
+  sc(r,5,'ด่านไม่มีใบกำกับภาษี',{ align:'left' });
   sc(r,6, numOrDash(t2BT),  { align:'right', numFmt: t2BT  ? NUM_FMT : undefined });
   sc(r,7, '-',               { align:'center' });
   sc(r,8, numOrDash(t2Tot), { align:'right', numFmt: t2Tot ? NUM_FMT : undefined });
   rowHeights[r-1] = { hpt:18 }; r++;
 
-  // ยอดรวมทั้งสิ้น (ไม่มีขอบ, ตัวหนา)
+  // ยอดรวมทั้งสิ้น (A-E ว่าง, F-H ตัวหนา+ขอบหนา)
   for(let c=1;c<=5;c++) sc(r,c,'',{border:false});
-  sc(r,6,`=F${rowEB}+F${rowEE}+F${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
-  sc(r,7,`=G${rowEB}+G${rowEE}+G${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
-  sc(r,8,`=H${rowEB}+H${rowEE}+H${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, border:false });
+  sc(r,6,`=F${rowEB}+F${rowEE}+F${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
+  sc(r,7,`=G${rowEB}+G${rowEE}+G${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
+  sc(r,8,`=H${rowEB}+H${rowEE}+H${rowT2}`,{ bold:true, align:'right', numFmt:NUM_FMT, medium:true });
   rowHeights[r-1] = { hpt:20 };
 
   ws['!ref']        = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:maxR,c:maxC} });
