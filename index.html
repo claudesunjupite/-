@@ -546,8 +546,27 @@ async function run() {
     const thaiMonth    = latestDate ? THAI_MONTHS[latestDate.getMonth() + 1] : 'รวม';
     const filename     = `รวม${thaiMonth}.xlsx`;
 
-    XLSX.writeFile(wb, filename);
-    showStatus(`ดาวน์โหลด ${filename} สำเร็จ ✓`, 'success');
+    // ── Save As dialog (File System Access API)
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: 'Excel Workbook', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
+        });
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const writable = await handle.createWritable();
+        await writable.write(new Blob([wbout], { type: 'application/octet-stream' }));
+        await writable.close();
+        showStatus(`บันทึก ${handle.name} สำเร็จ ✓`, 'success');
+      } catch (e) {
+        if (e.name !== 'AbortError') throw e;
+        showStatus('ยกเลิกการบันทึก', 'error');
+      }
+    } else {
+      // fallback สำหรับเบราว์เซอร์เก่า
+      XLSX.writeFile(wb, filename);
+      showStatus(`ดาวน์โหลด ${filename} สำเร็จ ✓`, 'success');
+    }
 
   } catch (err) {
     showStatus('เกิดข้อผิดพลาด: ' + err.message, 'error');
