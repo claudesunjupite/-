@@ -96,6 +96,23 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .footer { margin-top: 1rem; font-size: .73rem; color: #94a3b8; text-align: center; }
+
+    /* Summary panel */
+    .summary { display: none; margin-top: 1rem; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; }
+    .summary.show { display: block; }
+    .sum-header {
+      padding: .55rem 1rem; font-size: .8rem; font-weight: 600;
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .sum-header.ok     { background: #f0fdf4; color: #15803d; border-bottom: 1px solid #bbf7d0; }
+    .sum-header.warn   { background: #fffbeb; color: #b45309; border-bottom: 1px solid #fde68a; }
+    .sum-header.danger { background: #fef2f2; color: #dc2626; border-bottom: 1px solid #fecaca; }
+    .sum-list { list-style: none; padding: .4rem .8rem .5rem 1rem; background: #fff; }
+    .sum-list li {
+      font-size: .78rem; color: #374151; padding: .18rem 0;
+      display: flex; align-items: center; gap: .4rem;
+    }
+    .sum-list li::before { font-size: .72rem; }
   </style>
 </head>
 <body>
@@ -147,6 +164,7 @@
     ประมวลผลและดาวน์โหลด Excel
   </button>
   <div class="status" id="status"></div>
+  <div class="summary" id="summary"></div>
   <p class="footer">ไม่ต้องติดตั้งอะไร · ประมวลผลในเบราว์เซอร์ทั้งหมด</p>
 </div>
 
@@ -269,19 +287,23 @@ async function parsePDF(file) {
     const page    = await pdf.getPage(p);
     const content = await page.getTextContent();
 
-    // group text items by y-position (same row = within 4pt)
+    // group text items by y-position, sort each row left→right by x
     const byY = {};
     for (const item of content.items) {
       const y = Math.round(item.transform[5] / 4) * 4;
-      (byY[y] = byY[y] || []).push(item.str.trim());
+      const x = item.transform[4];
+      if (!byY[y]) byY[y] = [];
+      byY[y].push({ str: item.str.trim(), x });
     }
-    const rowLines = Object.values(byY).map(parts => parts.join(' ').trim()).filter(Boolean);
+    const rowLines = Object.values(byY)
+      .map(parts => parts.sort((a, b) => a.x - b.x).map(p => p.str).join(' ').trim())
+      .filter(Boolean);
 
     for (const line of rowLines) {
-      // find plate
-      if (!plate && /ทะเบียน/.test(line)) {
-        const m = line.match(/([ก-ฮ]{1,3}[ก-ฮ]?\s*\d{3,4})/);
-        if (m) plate = m[1].trim();
+      // ดึงทะเบียนจาก label "ทะเบียนรถ" โดยตรง รองรับทะเบียนขึ้นต้นด้วยตัวเลข เช่น 1ฒค2470
+      if (!plate && /ทะเบียนรถ/.test(line)) {
+        const m = line.match(/(\d{0,2}[ก-ฮ]{1,3}\s*\d{3,4})/);
+        if (m) plate = m[1].replace(/\s+/g, '').trim();
       }
       // find toll row: must contain date pattern + trailing numbers
       const dm = line.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/);
@@ -320,19 +342,17 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   const merges = [];
   const rowHeights = [];
   const colWidths = [8,13,14,24,22,14,11,14].map(w => ({ wch: w }));
-
   let maxR = 0, maxC = 7;
 
+  // ── helpers
   function sc(r, c, val, opts = {}) {
-    const ref = XLSX.utils.encode_cell({ r: r - 1, c: c - 1 });
-    if (r - 1 > maxR) maxR = r - 1;
-
+    const ref = XLSX.utils.encode_cell({ r: r-1, c: c-1 });
+    if (r-1 > maxR) maxR = r-1;
     let cell;
     const isFormula = typeof val === 'string' && val.startsWith('=');
-    if (isFormula)             cell = { t: 'n', f: val.slice(1) };
+    if (isFormula)                  cell = { t: 'n', f: val.slice(1) };
     else if (typeof val === 'number') cell = { t: 'n', v: val };
-    else                       cell = { t: 's', v: val == null ? '' : String(val) };
-
+    else                            cell = { t: 's', v: val == null ? '' : String(val) };
     cell.s = {
       font: { name: 'Kanit', sz: opts.sz || 10, bold: !!opts.bold,
               color: { rgb: opts.color || '000000' } },
@@ -341,139 +361,208 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     };
     if (opts.fill)   cell.s.fill = fill(opts.fill);
     if (opts.numFmt) cell.s.numFmt = opts.numFmt;
-
     ws[ref] = cell;
   }
-
-  function merge(r1, c1, r2, c2) {
-    merges.push({ s: { r: r1-1, c: c1-1 }, e: { r: r2-1, c: c2-1 } });
+  function merge(r1,c1,r2,c2) {
+    merges.push({ s:{r:r1-1,c:c1-1}, e:{r:r2-1,c:c2-1} });
   }
-
   function fmtDt(dt) {
     if (!dt) return '';
     return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}`;
   }
 
-  records = [...records].sort((a, b) => (a.dt || 0) - (b.dt || 0));
+  records = [...records].sort((a,b) => (a.dt||0)-(b.dt||0));
 
-  // Row 1 — title
-  merge(1,1,1,8);
-  sc(1, 1, `ทะเบียน ${plate}`, { bold: true, sz: 13, border: false });
+  // ── คำนวณข้อมูลวันที่ / ปีพ.ศ.
+  const dates = records.map(r => r.dt).filter(Boolean);
+  const minDt = dates.length ? dates.reduce((a,b) => a<b?a:b) : null;
+  const maxDt = dates.length ? dates.reduce((a,b) => a>b?a:b) : null;
+  const month     = maxDt ? maxDt.getMonth()+1 : 1;
+  const ceYear    = maxDt ? maxDt.getFullYear() : new Date().getFullYear();
+  const beYear    = ceYear + 543;
+  const monthStr  = String(month).padStart(2,'0');
+  const yearShort = String(beYear).slice(-2);
+  const lastDay   = new Date(ceYear, month, 0).getDate();
+  const dateRangeLeft  = `1-${lastDay}/${monthStr}/${beYear}`;
+  const dateRangeRight = `ยื่นภาษี ด.${monthStr}/${yearShort}`;
+
+  // ── Row 1: บริษัท (ซ้าย) / ทะเบียน (ขวา)
+  merge(1,1,1,6);
+  sc(1,1,'บจก.ซันจูปิเตอร์', { bold:true, sz:11, border:false, align:'left' });
+  merge(1,7,1,8);
+  sc(1,7,`ทะเบียน  ${plate}`, { bold:true, sz:11, border:false, align:'right' });
   rowHeights[0] = { hpt: 22 };
 
-  // Row 2 — date range
-  const dates = records.map(r => r.dt).filter(Boolean);
-  const minDt = dates.length ? new Date(Math.min(...dates.map(d => d.getTime()))) : null;
-  const maxDt = dates.length ? new Date(Math.max(...dates.map(d => d.getTime()))) : null;
-  const dateRange = dates.length
-    ? `วันที่ ${fmtDt(minDt)} - ${fmtDt(maxDt)}   เลขประจำตัวผู้เสียภาษี ${taxId}`
-    : '';
-  merge(2,1,2,8);
-  sc(2, 1, dateRange, { sz: 10, border: false });
+  // ── Row 2: ช่วงวันที่ พ.ศ. (ซ้าย) / ยื่นภาษี (ขวา)
+  merge(2,1,2,6);
+  sc(2,1, dateRangeLeft,  { sz:10, border:false, align:'left' });
+  merge(2,7,2,8);
+  sc(2,7, dateRangeRight, { sz:10, border:false, align:'right' });
   rowHeights[1] = { hpt: 16 };
 
-  // Row 3 — spacer
+  // ── Row 3: spacer
   rowHeights[2] = { hpt: 6 };
 
-  // Row 4 — Table 1 headers
-  const H1 = ['ลำดับ','ว.ด.ป.','ทะเบียนรถ','INV.','รายการ','ก่อนภาษี','ภาษี','รวมภาษี'];
-  H1.forEach((h, i) => sc(4, i+1, h, { bold: true, fill: COL_GRAY, medium: true }));
+  // ── Row 4: หัวตาราง 1
+  const HEADERS = ['ลำดับ','ว.ด.ป.','ทะเบียนรถ','INV.','รายการ','ก่อนภาษี','ภาษี','รวมภาษี'];
+  HEADERS.forEach((h,i) => sc(4,i+1,h,{ bold:true, fill:COL_GRAY, medium:true }));
   rowHeights[3] = { hpt: 18 };
 
-  // Data rows
+  // ── แถวข้อมูล Table 1 + track EB/EE subtotals
   let r = 5;
   const t1DataStart = r;
-  for (let i = 0; i < records.length; i++) {
-    const rec   = records[i];
-    const isEB  = rec.inv.toUpperCase().startsWith('EB');
+  let ebBT=0, ebTx=0, ebTot=0;
+  let eeBT=0, eeTx=0, eeTot=0;
+
+  for (let i=0; i<records.length; i++) {
+    const rec  = records[i];
+    const isEB = rec.inv.toUpperCase().startsWith('EB');
     const label = isEB ? 'ทางด่วนและรถไฟฟ้า' : 'การทางพิเศษฯ';
     const color = isEB ? 'FF0000' : '000000';
     const bg    = isEB ? COL_RED : undefined;
-
+    if (isEB) { ebBT+=rec.beforeTax; ebTx+=rec.tax; ebTot+=rec.total; }
+    else      { eeBT+=rec.beforeTax; eeTx+=rec.tax; eeTot+=rec.total; }
     [i+1, fmtDt(rec.dt), rec.plate, rec.inv, label,
-     rec.beforeTax, rec.tax, rec.total].forEach((v, ci) => {
-      sc(r, ci+1, v, {
-        color, fill: bg,
-        align: ci >= 5 ? 'right' : ci === 4 ? 'left' : 'center',
-        numFmt: ci >= 5 ? NUM_FMT : undefined,
-      });
+     rec.beforeTax, rec.tax, rec.total].forEach((v,ci) => {
+      sc(r,ci+1,v,{ color, fill:bg,
+        align: ci>=5?'right': ci===4?'left':'center',
+        numFmt: ci>=5?NUM_FMT:undefined });
     });
-    rowHeights[r-1] = { hpt: 15 };
+    rowHeights[r-1] = { hpt:15 };
     r++;
   }
 
-  // Table 1 total
-  const t1End   = r - 1;
-  const t1Total = r;
+  // ── Table 1 รวม
+  const t1End=r-1, t1TotalRow=r;
   ['','','','','รวมทั้งหมด',
    `=SUM(F${t1DataStart}:F${t1End})`,
    `=SUM(G${t1DataStart}:G${t1End})`,
-   `=SUM(H${t1DataStart}:H${t1End})`].forEach((v, ci) => {
-    sc(t1Total, ci+1, v, { bold: true, fill: COL_LGRAY,
-      align: ci >= 4 ? 'right' : 'center',
-      numFmt: ci >= 5 ? NUM_FMT : undefined });
+   `=SUM(H${t1DataStart}:H${t1End})`].forEach((v,ci) => {
+    sc(t1TotalRow,ci+1,v,{ bold:true, fill:COL_LGRAY,
+      align:ci>=4?'right':'center', numFmt:ci>=5?NUM_FMT:undefined });
   });
-  rowHeights[t1Total-1] = { hpt: 16 };
+  rowHeights[t1TotalRow-1] = { hpt:16 };
   r++;
 
-  // Table 2 (PDF extras)
-  if (pdfExtras.length > 0) {
-    r += 3; // gap
+  // ── Table 2 (ด่านไม่มีใบกำกับภาษี จาก PDF)
+  let t2TotalRow = null;
+  let t2BT=0, t2Tot=0;
 
-    const H2 = ['ลำดับ','ว.ด.ป.','ทะเบียนรถ','รายการ','ก่อนภาษี','ภาษี','รวมภาษี'];
-    H2.forEach((h, i) => sc(r, i+1, h, { bold: true, fill: COL_GRAY, medium: true }));
-    rowHeights[r-1] = { hpt: 18 };
+  if (pdfExtras.length > 0) {
+    r += 3; // ช่องว่าง 3 แถว
+
+    // หัวตาราง 2 (8 คอลัมน์เหมือน Table 1)
+    HEADERS.forEach((h,i) => sc(r,i+1,h,{ bold:true, fill:COL_GRAY, medium:true }));
+    rowHeights[r-1] = { hpt:18 };
     r++;
 
     const t2DataStart = r;
-    for (let i = 0; i < pdfExtras.length; i++) {
+    for (let i=0; i<pdfExtras.length; i++) {
       const it = pdfExtras[i];
+      t2BT  += it.total;
+      t2Tot += it.total;
+      // INV = ชื่อด่าน, รายการ = "ด่านไม่มีใบกำกับภาษี", ภาษี = ว่าง
       [i+1, it.dateStr, plate, it.location,
-       it.beforeTax, it.tax, it.total].forEach((v, ci) => {
-        sc(r, ci+1, v, {
-          align: ci >= 4 ? 'right' : ci === 3 ? 'left' : 'center',
-          numFmt: ci >= 4 ? NUM_FMT : undefined,
+       'ด่านไม่มีใบกำกับภาษี', it.total, '', it.total].forEach((v,ci) => {
+        sc(r,ci+1,v,{
+          align: ci>=5?'right': ci===4?'left':'center',
+          numFmt: (ci===5||ci===7)?NUM_FMT:undefined,
+          border: true,
         });
       });
-      rowHeights[r-1] = { hpt: 15 };
+      rowHeights[r-1] = { hpt:15 };
       r++;
     }
 
-    const t2End   = r - 1;
-    const t2Total = r;
-    ['','','','รวมทั้งหมด',
-     `=SUM(E${t2DataStart}:E${t2End})`,
+    // Table 2 รวม
+    const t2End=r-1;
+    t2TotalRow=r;
+    ['','','','','รวมทั้งหมด',
      `=SUM(F${t2DataStart}:F${t2End})`,
-     `=SUM(G${t2DataStart}:G${t2End})`].forEach((v, ci) => {
-      sc(t2Total, ci+1, v, { bold: true, fill: COL_LGRAY,
-        align: ci >= 3 ? 'right' : 'center',
-        numFmt: ci >= 4 ? NUM_FMT : undefined });
+     '',
+     `=SUM(H${t2DataStart}:H${t2End})`].forEach((v,ci) => {
+      sc(t2TotalRow,ci+1,v,{ bold:true, fill:COL_LGRAY,
+        align:ci>=4?'right':'center', numFmt:(ci===5||ci===7)?NUM_FMT:undefined });
     });
-    rowHeights[t2Total-1] = { hpt: 16 };
-    r += 2; // gap + grand
-
-    const grand = r;
-    ['','','','ยอดรวมทั้งสิ้น',
-     `=F${t1Total}+E${t2Total}`,
-     `=G${t1Total}+F${t2Total}`,
-     `=H${t1Total}+G${t2Total}`].forEach((v, ci) => {
-      sc(grand, ci+1, v, { bold: true, sz: 11, fill: COL_YELLOW,
-        align: ci >= 3 ? 'right' : 'center',
-        numFmt: ci >= 4 ? NUM_FMT : undefined });
-    });
-    rowHeights[grand-1] = { hpt: 20 };
+    rowHeights[t2TotalRow-1] = { hpt:16 };
+    r++;
   }
 
-  ws['!ref']    = XLSX.utils.encode_range({ s: {r:0,c:0}, e: {r:maxR, c:maxC} });
+  // ── สรุปท้าย: EB / EE / ด่านไม่มีใบกำกับ / ยอดรวม
+  r++; // 1 แถวว่าง
+  const sumOpts = (align='right') => ({ bold:true, border:false, align, numFmt:NUM_FMT });
+
+  // แถว ทางด่วนและรถไฟฟ้า
+  const rowEB = r;
+  sc(r,5,'ทางด่วนและรถไฟฟ้า',{ bold:true, border:false, align:'left' });
+  sc(r,6, ebBT  || '', { ...sumOpts(), numFmt: ebBT  ? NUM_FMT : undefined });
+  sc(r,7, ebTx  || '', { ...sumOpts(), numFmt: ebTx  ? NUM_FMT : undefined });
+  sc(r,8, ebTot || '', { ...sumOpts(), numFmt: ebTot ? NUM_FMT : undefined });
+  rowHeights[r-1] = { hpt:15 }; r++;
+
+  // แถว การทางพิเศษฯ
+  const rowEE = r;
+  sc(r,5,'การทางพิเศษฯ',{ bold:true, border:false, align:'left' });
+  sc(r,6, eeBT,  { ...sumOpts() });
+  sc(r,7, eeTx,  { ...sumOpts() });
+  sc(r,8, eeTot, { ...sumOpts() });
+  rowHeights[r-1] = { hpt:15 }; r++;
+
+  // แถว ด่านไม่มีใบกำกับภาษี
+  const rowT2 = r;
+  sc(r,5,'ด่านไม่มีใบกำกับภาษี',{ bold:true, border:false, align:'left' });
+  sc(r,6, t2BT  || '', { ...sumOpts(), numFmt: t2BT  ? NUM_FMT : undefined });
+  sc(r,7, '',          { border:false });
+  sc(r,8, t2Tot || '', { ...sumOpts(), numFmt: t2Tot ? NUM_FMT : undefined });
+  rowHeights[r-1] = { hpt:15 }; r++;
+
+  // ยอดรวมทั้งสิ้น (เหลือง)
+  sc(r,6,`=F${rowEB}+F${rowEE}+F${rowT2}`,{ bold:true, sz:11, fill:COL_YELLOW, border:false, align:'right', numFmt:NUM_FMT });
+  sc(r,7,`=G${rowEB}+G${rowEE}+G${rowT2}`,{ bold:true, sz:11, fill:COL_YELLOW, border:false, align:'right', numFmt:NUM_FMT });
+  sc(r,8,`=H${rowEB}+H${rowEE}+H${rowT2}`,{ bold:true, sz:11, fill:COL_YELLOW, border:false, align:'right', numFmt:NUM_FMT });
+  rowHeights[r-1] = { hpt:20 };
+
+  ws['!ref']    = XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:maxR,c:maxC} });
   ws['!merges'] = merges;
   ws['!rows']   = rowHeights;
   ws['!cols']   = colWidths;
   ws['!freeze'] = { ySplit: 4 };
-
   return ws;
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
+function showSummary(matched, csvOnly, pdfOnly, failedPDFs) {
+  const el = document.getElementById('summary');
+  el.innerHTML = '';
+
+  function makeBlock(cls, icon, title, items) {
+    if (!items.length) return;
+    const block = document.createElement('div');
+
+    const hdr = document.createElement('div');
+    hdr.className = `sum-header ${cls}`;
+    hdr.innerHTML = `<span>${icon}</span><span>${title} (${items.length})</span>`;
+    block.appendChild(hdr);
+
+    const ul = document.createElement('ul');
+    ul.className = 'sum-list';
+    items.forEach(txt => {
+      const li = document.createElement('li');
+      li.textContent = txt;
+      ul.appendChild(li);
+    });
+    block.appendChild(ul);
+    el.appendChild(block);
+  }
+
+  makeBlock('ok',     '✅', 'มีทั้ง CSV + PDF ครบคู่', matched);
+  makeBlock('warn',   '⚠️', 'มีแค่ CSV — ไม่มี PDF คู่กัน', csvOnly);
+  makeBlock('danger', '❌', 'มีแค่ PDF — ไม่มีข้อมูล CSV', pdfOnly);
+  makeBlock('danger', '🚫', 'PDF อ่านทะเบียนไม่ได้', failedPDFs);
+
+  el.className = 'summary show';
+}
+
 function showStatus(msg, type) {
   const el = document.getElementById('status');
   el.className = 'status show ' + type;
@@ -491,17 +580,19 @@ async function run() {
   showStatus('กำลังอ่านไฟล์ CSV...', 'loading');
 
   try {
-    // ── Parse CSVs
+    // ── Parse CSVs — จัดกลุ่มตามทะเบียนในแต่ละ record ไม่ใช่ชื่อไฟล์
     const plateData = {};
     for (const f of csvFiles) {
       const text    = await readFileText(f);
       const records = parseCSV(text);
-      if (!records.length) continue;
-      const plate  = records[0].plate;
-      const taxId  = records[0].taxId || '0994000165421';
-      const key    = normPlate(plate);
-      if (!plateData[key]) plateData[key] = { plate, taxId, records: [] };
-      plateData[key].records.push(...records);
+      for (const rec of records) {
+        if (!rec.plate) continue;
+        const key = normPlate(rec.plate);
+        if (!plateData[key]) {
+          plateData[key] = { plate: rec.plate, taxId: rec.taxId || '0994000165421', records: [] };
+        }
+        plateData[key].records.push(rec);
+      }
     }
 
     if (!Object.keys(plateData).length) {
@@ -511,15 +602,25 @@ async function run() {
     // ── Parse PDFs
     showStatus('กำลังอ่านไฟล์ PDF...', 'loading');
     const pdfByPlate = {};
+    const failedPDFs = [];
     if (pdfFiles) {
       for (const f of pdfFiles) {
         const { plate, items } = await parsePDF(f);
         if (plate && items.length) {
           const key = normPlate(plate);
           (pdfByPlate[key] = pdfByPlate[key] || []).push(...items);
+        } else {
+          failedPDFs.push(f.name);
         }
       }
     }
+    // ── เปรียบเทียบทะเบียนระหว่าง CSV และ PDF (จากข้อมูลในไฟล์ทั้งหมด ไม่ใช่ชื่อไฟล์)
+    const csvPlates = Object.keys(plateData);
+    const pdfPlates = Object.keys(pdfByPlate);
+    const matched = csvPlates.filter(k => pdfPlates.includes(k)).map(k => plateData[k].plate);
+    const csvOnly = csvPlates.filter(k => !pdfPlates.includes(k)).map(k => plateData[k].plate);
+    const pdfOnly = pdfPlates.filter(k => !csvPlates.includes(k)).map(k => k);
+    showSummary(matched, csvOnly, pdfOnly, failedPDFs);
 
     // ── Build workbook
     showStatus('กำลังสร้าง Excel...', 'loading');
