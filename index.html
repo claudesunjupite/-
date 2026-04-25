@@ -354,7 +354,7 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     else if (typeof val === 'number') cell = { t: 'n', v: val };
     else                            cell = { t: 's', v: val == null ? '' : String(val) };
     cell.s = {
-      font: { name: 'Kanit', sz: opts.sz || 10, bold: !!opts.bold,
+      font: { name: opts.font || 'Angsana New', sz: opts.sz || 16, bold: !!opts.bold,
               color: { rgb: opts.color || '000000' } },
       alignment: { horizontal: opts.align || 'center', vertical: 'center' },
       border: opts.border === false ? undefined : (opts.medium ? medBorder() : thinBorder()),
@@ -386,30 +386,33 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   const dateRangeLeft  = `1-${lastDay}/${monthStr}/${beYear}`;
   const dateRangeRight = `ยื่นภาษี ด.${monthStr}/${yearShort}`;
 
-  // ── Row 1: บริษัท (ซ้าย) / ทะเบียน (ขวา)
-  merge(1,1,1,6);
-  sc(1,1,'บจก.ซันจูปิเตอร์', { bold:true, sz:11, border:false, align:'left' });
-  merge(1,7,1,8);
-  sc(1,7,`ทะเบียน  ${plate}`, { bold:true, sz:11, border:false, align:'right' });
-  rowHeights[0] = { hpt: 22 };
+  // ── Row 1: บริษัท (center, full merge)
+  merge(1,1,1,8);
+  sc(1,1,'บจก.ซันจูปิเตอร์', { bold:true, sz:16, border:false, align:'center' });
+  rowHeights[0] = { hpt: 26 };
 
-  // ── Row 2: ช่วงวันที่ พ.ศ. (ซ้าย) / ยื่นภาษี (ขวา)
-  merge(2,1,2,6);
-  sc(2,1, dateRangeLeft,  { sz:10, border:false, align:'left' });
-  merge(2,7,2,8);
-  sc(2,7, dateRangeRight, { sz:10, border:false, align:'right' });
-  rowHeights[1] = { hpt: 16 };
+  // ── Row 2: ทะเบียน (center, full merge)
+  merge(2,1,2,8);
+  sc(2,1,`ทะเบียน  ${plate}`, { bold:true, sz:16, border:false, align:'center' });
+  rowHeights[1] = { hpt: 26 };
 
-  // ── Row 3: spacer
-  rowHeights[2] = { hpt: 6 };
+  // ── Row 3: ช่วงวันที่ พ.ศ. (ซ้าย) / ยื่นภาษี (ขวา)
+  merge(3,1,3,6);
+  sc(3,1, dateRangeLeft,  { sz:16, border:false, align:'left' });
+  merge(3,7,3,8);
+  sc(3,7, dateRangeRight, { sz:16, border:false, align:'right' });
+  rowHeights[2] = { hpt: 22 };
 
-  // ── Row 4: หัวตาราง 1
+  // ── Row 4: spacer
+  rowHeights[3] = { hpt: 6 };
+
+  // ── Row 5: หัวตาราง 1
   const HEADERS = ['ลำดับ','ว.ด.ป.','ทะเบียนรถ','INV.','รายการ','ก่อนภาษี','ภาษี','รวมภาษี'];
-  HEADERS.forEach((h,i) => sc(4,i+1,h,{ bold:true, fill:COL_GRAY, medium:true }));
-  rowHeights[3] = { hpt: 18 };
+  HEADERS.forEach((h,i) => sc(5,i+1,h,{ bold:true, fill:COL_GRAY, medium:true }));
+  rowHeights[4] = { hpt: 20 };
 
   // ── แถวข้อมูล Table 1 + track EB/EE subtotals
-  let r = 5;
+  let r = 6;
   const t1DataStart = r;
   let ebBT=0, ebTx=0, ebTot=0;
   let eeBT=0, eeTx=0, eeTot=0;
@@ -526,7 +529,7 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   ws['!merges'] = merges;
   ws['!rows']   = rowHeights;
   ws['!cols']   = colWidths;
-  ws['!freeze'] = { ySplit: 4 };
+  ws['!freeze'] = { ySplit: 5 };
   return ws;
 }
 
