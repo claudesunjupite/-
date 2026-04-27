@@ -645,8 +645,8 @@ function buildSheet(plate, records, pdfExtras, taxId) {
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
-// showSummary — รับ { csvEntries, pdfEntries, failedPDFs, csvDuplicates }
-function showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates = [] }) {
+// showSummary — รับ { csvEntries, pdfEntries, failedPDFs, csvDuplicates, pdfDuplicates }
+function showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates = [], pdfDuplicates = [] }) {
   const el = document.getElementById('summary');
   el.innerHTML = '';
 
@@ -715,7 +715,15 @@ function showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates = [] })
   makeAlert(
     'orange', '⚠️', 'ทะเบียนซ้ำใน CSV หลายไฟล์',
     csvDuplicates.map(d =>
-      `<strong>${d.plate}</strong> พบใน ${d.files.map(f => `<em>${f}</em>`).join(', ')}`
+      `📄 <strong>${d.plate}</strong> — ${d.files.map(f => `<em>${f}</em>`).join(' · ')}`
+    )
+  );
+
+  // ── ทะเบียนซ้ำข้ามไฟล์ PDF
+  makeAlert(
+    'orange', '⚠️', 'ทะเบียนซ้ำใน PDF หลายไฟล์',
+    pdfDuplicates.map(d =>
+      `📋 <strong>${d.plate}</strong> — ${d.files.map(f => `<em>${f}</em>`).join(' · ')}`
     )
   );
 
@@ -873,7 +881,18 @@ async function run() {
       matched: csvPlates.includes(k),
     }));
 
-    showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates });
+    // ── ตรวจ PDF ซ้ำ: หลายไฟล์ PDF ถูกจับคู่กับทะเบียนเดียวกัน
+    const pdfFilesByKey = {};
+    for (const log of matchLog) {
+      const k = normPlate(log.plate);
+      if (!pdfFilesByKey[k]) pdfFilesByKey[k] = [];
+      pdfFilesByKey[k].push(log.file);
+    }
+    const pdfDuplicates = Object.entries(pdfFilesByKey)
+      .filter(([, files]) => files.length > 1)
+      .map(([k, files]) => ({ plate: plateData[k]?.plate || k, files }));
+
+    showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates, pdfDuplicates });
 
     // ── Build workbook
     showStatus('กำลังสร้าง Excel...', 'loading');
