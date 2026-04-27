@@ -97,22 +97,57 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .footer { margin-top: 1rem; font-size: .73rem; color: #94a3b8; text-align: center; }
 
-    /* Summary panel */
-    .summary { display: none; margin-top: 1rem; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; }
+    /* ── Summary panel ─────────────────────────────────────── */
+    .summary { display: none; margin-top: 1rem; }
     .summary.show { display: block; }
-    .sum-header {
-      padding: .55rem 1rem; font-size: .8rem; font-weight: 600;
-      display: flex; align-items: center; gap: .4rem;
+
+    /* grid 2 คอลัมน์ */
+    .sum-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: .6rem;
+      margin-bottom: .6rem;
     }
-    .sum-header.ok     { background: #f0fdf4; color: #15803d; border-bottom: 1px solid #bbf7d0; }
-    .sum-header.warn   { background: #fffbeb; color: #b45309; border-bottom: 1px solid #fde68a; }
-    .sum-header.danger { background: #fef2f2; color: #dc2626; border-bottom: 1px solid #fecaca; }
-    .sum-list { list-style: none; padding: .4rem .8rem .5rem 1rem; background: #fff; }
-    .sum-list li {
-      font-size: .78rem; color: #374151; padding: .18rem 0;
-      display: flex; align-items: center; gap: .4rem;
+    .sum-col {
+      border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;
     }
-    .sum-list li::before { font-size: .72rem; }
+    .sum-col-title {
+      padding: .45rem .8rem; font-size: .78rem; font-weight: 600;
+      background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+      display: flex; align-items: center; gap: .35rem; color: #374151;
+    }
+    .sum-chips {
+      padding: .5rem .6rem; display: flex; flex-wrap: wrap; gap: .35rem;
+      background: #fff; min-height: 36px;
+    }
+
+    /* chip */
+    .chip {
+      font-size: .72rem; font-weight: 500; border-radius: 20px;
+      padding: 3px 10px; white-space: nowrap; line-height: 1.4;
+    }
+    .chip-green {
+      background: #f0fdf4; color: #15803d; border: 1px solid #86efac;
+    }
+    .chip-red {
+      background: #fef2f2; color: #dc2626; border: 1px solid #fca5a5;
+    }
+
+    /* alert blocks (duplicate / failed) */
+    .sum-alert {
+      border-radius: 10px; overflow: hidden; margin-bottom: .6rem;
+    }
+    .sum-alert.orange { border: 1px solid #fed7aa; }
+    .sum-alert.red    { border: 1px solid #fecaca; }
+    .sum-alert-title {
+      padding: .45rem .8rem; font-size: .78rem; font-weight: 600;
+      display: flex; align-items: center; gap: .35rem;
+    }
+    .sum-alert.orange .sum-alert-title { background: #fff7ed; color: #c2410c; border-bottom: 1px solid #fed7aa; }
+    .sum-alert.red    .sum-alert-title { background: #fef2f2; color: #dc2626; border-bottom: 1px solid #fecaca; }
+    .sum-alert-list {
+      list-style: none; padding: .4rem .8rem .5rem; background: #fff;
+    }
+    .sum-alert-list li { font-size: .74rem; color: #374151; padding: .18rem 0; line-height: 1.5; }
+    .sum-alert-list li strong { color: #1e2d4a; }
   </style>
 </head>
 <body>
@@ -610,34 +645,85 @@ function buildSheet(plate, records, pdfExtras, taxId) {
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
-function showSummary(matched, csvOnly, pdfOnly, failedPDFs) {
+// showSummary — รับ { csvEntries, pdfEntries, failedPDFs, csvDuplicates }
+function showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates = [] }) {
   const el = document.getElementById('summary');
   el.innerHTML = '';
 
-  function makeBlock(cls, icon, title, items) {
-    if (!items.length) return;
-    const block = document.createElement('div');
+  // ── helper: สร้าง chip
+  function chip(text, isGreen) {
+    const span = document.createElement('span');
+    span.className = 'chip ' + (isGreen ? 'chip-green' : 'chip-red');
+    span.textContent = text;
+    return span;
+  }
+
+  // ── Grid 2 คอลัมน์
+  const grid = document.createElement('div');
+  grid.className = 'sum-grid';
+
+  function makeCol(icon, title, entries) {
+    const col = document.createElement('div');
+    col.className = 'sum-col';
 
     const hdr = document.createElement('div');
-    hdr.className = `sum-header ${cls}`;
-    hdr.innerHTML = `<span>${icon}</span><span>${title} (${items.length})</span>`;
+    hdr.className = 'sum-col-title';
+    const matchedN = entries.filter(e => e.matched).length;
+    hdr.innerHTML = `<span>${icon}</span><span>${title}</span>`
+                  + `<span style="margin-left:auto;font-weight:400;color:#64748b;">`
+                  + `${matchedN}/${entries.length} คู่</span>`;
+    col.appendChild(hdr);
+
+    const chips = document.createElement('div');
+    chips.className = 'sum-chips';
+    if (!entries.length) {
+      chips.innerHTML = '<span style="font-size:.72rem;color:#94a3b8;">ไม่มีข้อมูล</span>';
+    } else {
+      entries.forEach(e => chips.appendChild(chip(e.plate, e.matched)));
+    }
+    col.appendChild(chips);
+    return col;
+  }
+
+  grid.appendChild(makeCol('📄', 'CSV (reprint)', csvEntries));
+  grid.appendChild(makeCol('📋', 'PDF (ใบกำกับ)', pdfEntries));
+  el.appendChild(grid);
+
+  // ── helper สร้าง alert block
+  function makeAlert(colorCls, icon, title, rows) {
+    if (!rows.length) return;
+    const block = document.createElement('div');
+    block.className = `sum-alert ${colorCls}`;
+
+    const hdr = document.createElement('div');
+    hdr.className = 'sum-alert-title';
+    hdr.innerHTML = `<span>${icon}</span><span>${title} (${rows.length})</span>`;
     block.appendChild(hdr);
 
     const ul = document.createElement('ul');
-    ul.className = 'sum-list';
-    items.forEach(txt => {
+    ul.className = 'sum-alert-list';
+    rows.forEach(html => {
       const li = document.createElement('li');
-      li.textContent = txt;
+      li.innerHTML = html;
       ul.appendChild(li);
     });
     block.appendChild(ul);
     el.appendChild(block);
   }
 
-  makeBlock('ok',     '✅', 'มีทั้ง CSV + PDF ครบคู่', matched);
-  makeBlock('warn',   '⚠️', 'มีแค่ CSV — ไม่มี PDF คู่กัน', csvOnly);
-  makeBlock('danger', '❌', 'มีแค่ PDF — ไม่มีข้อมูล CSV', pdfOnly);
-  makeBlock('danger', '🚫', 'PDF อ่านทะเบียนไม่ได้', failedPDFs);
+  // ── ทะเบียนซ้ำข้ามไฟล์ CSV
+  makeAlert(
+    'orange', '⚠️', 'ทะเบียนซ้ำใน CSV หลายไฟล์',
+    csvDuplicates.map(d =>
+      `<strong>${d.plate}</strong> พบใน ${d.files.map(f => `<em>${f}</em>`).join(', ')}`
+    )
+  );
+
+  // ── PDF จับคู่ไม่ได้
+  makeAlert(
+    'red', '🚫', 'PDF จับคู่ไม่ได้',
+    failedPDFs.map(txt => txt)
+  );
 
   el.className = 'summary show';
 }
@@ -659,8 +745,10 @@ async function run() {
   showStatus('กำลังอ่านไฟล์ CSV...', 'loading');
 
   try {
-    // ── Parse CSVs — จัดกลุ่มตามทะเบียนในแต่ละ record ไม่ใช่ชื่อไฟล์
-    const plateData = {};
+    // ── Parse CSVs — จัดกลุ่มตามทะเบียนในแต่ละ record
+    const plateData  = {};
+    const plateFiles = {};   // key → Set ของชื่อไฟล์ที่มีทะเบียนนั้น
+
     for (const f of csvFiles) {
       const text    = await readFileText(f);
       const records = parseCSV(text);
@@ -669,10 +757,20 @@ async function run() {
         const key = normPlate(rec.plate);
         if (!plateData[key]) {
           plateData[key] = { plate: rec.plate, taxId: rec.taxId || '0994000165421', records: [] };
+          plateFiles[key] = new Set();
         }
         plateData[key].records.push(rec);
+        plateFiles[key].add(f.name);
       }
     }
+
+    // ── ตรวจทะเบียนที่ซ้ำข้ามไฟล์ CSV
+    const csvDuplicates = Object.entries(plateFiles)
+      .filter(([, files]) => files.size > 1)
+      .map(([key, files]) => ({
+        plate: plateData[key].plate,
+        files: [...files],
+      }));
 
     if (!Object.keys(plateData).length) {
       showStatus('ไม่พบข้อมูลในไฟล์ CSV', 'error'); return;
@@ -765,13 +863,17 @@ async function run() {
     // ── สรุปการจับคู่
     const csvPlates = Object.keys(plateData);
     const pdfPlates = Object.keys(pdfByPlate);
-    const matched = csvPlates.filter(k => pdfPlates.includes(k)).map(k => {
-      const log = matchLog.find(l => normPlate(l.plate) === k);
-      return plateData[k].plate + (log ? ` ← ${log.file} (${log.method})` : '');
-    });
-    const csvOnly = csvPlates.filter(k => !pdfPlates.includes(k)).map(k => plateData[k].plate);
-    const pdfOnly = pdfPlates.filter(k => !csvPlates.includes(k)).map(k => k);
-    showSummary(matched, csvOnly, pdfOnly, failedPDFs);
+
+    const csvEntries = csvPlates.map(k => ({
+      plate:   plateData[k].plate,
+      matched: pdfPlates.includes(k),
+    }));
+    const pdfEntries = pdfPlates.map(k => ({
+      plate:   plateData[k]?.plate || k,
+      matched: csvPlates.includes(k),
+    }));
+
+    showSummary({ csvEntries, pdfEntries, failedPDFs, csvDuplicates });
 
     // ── Build workbook
     showStatus('กำลังสร้าง Excel...', 'loading');
