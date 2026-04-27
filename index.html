@@ -267,17 +267,25 @@ function normPlate(p) { return (p||'').replace(/\s+/g,''); }
 
 function beToCe(y) { return y > 2400 ? y - 543 : y; }
 
-// Parse "DD/MM/YYYY", "DD/MM/BYYY", "YYYY-MM-DD" → Date (local time, no UTC shift)
+// Parse วันที่ทุกรูปแบบ → Date (local time ไม่มี UTC shift)
+// รองรับ: ISO datetime, ISO date, DD/MM/YYYY, DD/MM/BE
 function parseDateStr(s) {
   if (!s) return null;
-  // DD/MM/YYYY or DD-MM-YYYY (Thai layout)
-  const m1 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  s = s.trim();
+  // "2026-03-29T18:23:44" หรือ "2026-03-29 18:23:44" (ISO with time — CSV reprint format)
+  const m0 = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})[T ]/);
+  if (m0) {
+    const [, y, mo, d] = m0;
+    return new Date(beToCe(+y), +mo - 1, +d);
+  }
+  // "29/03/2026" หรือ "29-03-2026" (DD/MM/YYYY Thai format)
+  const m1 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
   if (m1) {
     const [, d, mo, y] = m1;
     return new Date(beToCe(+y), +mo - 1, +d);
   }
-  // YYYY-MM-DD (ISO)
-  const m2 = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  // "2026-03-29" (ISO date only)
+  const m2 = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
   if (m2) {
     const [, y, mo, d] = m2;
     return new Date(beToCe(+y), +mo - 1, +d);
@@ -347,20 +355,25 @@ async function parsePDF(file) {
       }
       nextLineMayBePlate = false;
 
+      // ── ข้ามรายการที่ไม่ใช่ผ่านทาง ────────────────────────────────
+      if (/เติมเงิน|top.?up|topup|refund|คืนเงิน|ยกเลิก/i.test(line)) continue;
+
       // ── ตรวจหาแถวข้อมูล: ต้องมีวันที่ ─────────────────────────────
-      const dm = line.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+      const dm = line.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/);
       if (!dm) continue;
       const rawDate = dm[1];
-      // รองรับปี 2 หลัก (เช่น 26 → 2569 พ.ศ. หรือ 2026 ค.ศ.)
-      const dateKey = normDateKey(rawDate.replace(
-        /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/,
-        (_, d, m, y) => `${d}/${m}/${+y < 100 ? 2500 + +y : y}`
-      ));
+      // แปลงเป็น key "CCYY-MM-DD" (รองรับปี พ.ศ./ค.ศ. อัตโนมัติผ่าน beToCe)
+      const dateKey = normDateKey(rawDate);
+      // date string สำหรับแสดงผลใน Excel — ใช้ CE year เสมอ
+      const ceDateStr = dateKey
+        ? dateKey.split('-').reverse().join('/')   // "YYYY-MM-DD" → "DD/MM/YYYY"
+        : rawDate;
 
-      // ดึงตัวเลขทุกตัว กรองเฉพาะที่สมเหตุสมผล (ไม่ใช่ปี พ.ศ. / ค.ศ.)
+      // ดึงตัวเลขทุกตัว กรองเฉพาะที่สมเหตุสมผล
+      // ตัดปี พ.ศ./ค.ศ. (1900-2600) และตัวเลขขนาดใหญ่ผิดปกติออก
       const nums = [...line.matchAll(/([\d,]+(?:\.\d+)?)/g)]
         .map(m => parseFloat(m[1].replace(/,/g, '')))
-        .filter(n => n > 0 && n < 100000 && !(n >= 2000 && n <= 2600 && Number.isInteger(n)));
+        .filter(n => n > 0 && n < 100000 && !(n >= 1900 && n <= 2600 && Number.isInteger(n)));
       if (!nums.length) continue;
 
       const total     = nums[nums.length - 1];
@@ -369,12 +382,12 @@ async function parsePDF(file) {
 
       // ดึงชื่อสถานที่ (ตัดตัวเลขและวันที่ออก)
       const locationRaw = line
-        .replace(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/g, ' ')
+        .replace(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/g, ' ')
         .replace(/[\d,\.]+/g, ' ')
         .replace(/\s+/g, ' ').trim();
       const location = locationRaw.length > 1 ? locationRaw.split(/\s{2,}/)[0].trim() : '';
 
-      items.push({ dateKey, dateStr: rawDate, location, beforeTax, tax, total });
+      items.push({ dateKey, dateStr: ceDateStr, location, beforeTax, tax, total });
     }
   }
 
@@ -433,7 +446,11 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')}/${dt.getFullYear()}`;
   }
 
-  records = [...records].sort((a,b) => (a.dt||0)-(b.dt||0));
+  records    = [...records].sort((a,b) => (a.dt||0)-(b.dt||0));
+  pdfExtras  = [...pdfExtras].sort((a,b) => a.dateKey.localeCompare(b.dateKey));
+
+  // number format ใช้ทั้ง Table 2 total และ summary
+  const DASH_FMT = '#,##0.00;-#,##0.00;"-"';
 
   // ── คำนวณข้อมูลวันที่ / ปีพ.ศ.
   const dates = records.map(r => r.dt).filter(Boolean);
@@ -462,7 +479,8 @@ function buildSheet(plate, records, pdfExtras, taxId) {
   sc(2,7, dateRangeRight, { sz:16, border:false, align:'center' });
   rowHeights[1] = { hpt: 22 };
 
-  // ── Row 3: spacer
+  // ── Row 3: spacer (ต้องมี cell จริงๆ ไม่งั้น Excel อาจไม่ยืด row height)
+  for (let c = 1; c <= 8; c++) sc(3, c, '', { border: false });
   rowHeights[2] = { hpt: 6 };
 
   // ── Row 4: หัวตาราง 1 (ขาวดำ — ตัวหนา + ขอบ)
@@ -539,23 +557,14 @@ function buildSheet(plate, records, pdfExtras, taxId) {
     t2TotalRow=r;
     for (let ci=0; ci<5; ci++) sc(t2TotalRow,ci+1,'',{ border:false });
     sc(t2TotalRow,6,`=SUM(F${t2DataStart}:F${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT });
-    sc(t2TotalRow,7,'',{ border:true });
+    sc(t2TotalRow,7, 0, { bold:true, align:'right', numFmt:DASH_FMT });
     sc(t2TotalRow,8,`=SUM(H${t2DataStart}:H${t2End})`,{ bold:true, align:'right', numFmt:NUM_FMT });
     rowHeights[t2TotalRow-1] = { hpt:16 };
     r++;
   }
 
-  // ── สรุปท้าย: EB / EE / ด่านไม่มีใบกำกับ / ยอดรวม (เป็นตาราง มีขอบ)
+  // ── สรุปท้าย: EB / EE / ด่านไม่มีใบกำกับ / ยอดรวม
   r++; // 1 แถวว่าง
-
-  function scSum(row, col, val, opts={}) {
-    // A-D ว่างไม่มีขอบ, E-H มีขอบบาง
-    if (col < 5) { sc(row,col,'',{ border:false }); return; }
-    sc(row, col, val, { align:'right', ...opts, border:true });
-  }
-
-  // number format: แสดง 0 เป็น "-" แต่ยังเป็น number ให้ formula ใช้ได้
-  const DASH_FMT = '#,##0.00;-#,##0.00;"-"';
 
   // แถว ทางด่วนและรถไฟฟ้า (E-H มีขอบบาง)
   const rowEB = r;
@@ -671,23 +680,95 @@ async function run() {
 
     // ── Parse PDFs
     showStatus('กำลังอ่านไฟล์ PDF...', 'loading');
-    const pdfByPlate = {};
-    const failedPDFs = [];
+    const pdfByPlate  = {};   // key → [items]
+    const failedPDFs  = [];   // ไฟล์ที่จับคู่ไม่ได้
+    const matchLog    = [];   // สรุปว่า PDF แต่ละไฟล์จับคู่กับทะเบียนไหน
+
+    // ── สร้าง lookup: csvKey → plate key (สำหรับ transaction matching)
+    // csvKey = "YYYY-MM-DD|total.toFixed(2)"
+    function buildCSVIndex(plateData) {
+      // key → { plateKey, count }[]
+      const idx = {};
+      for (const [pkey, pdata] of Object.entries(plateData)) {
+        for (const rec of pdata.records) {
+          if (!rec.dt) continue;
+          const ck = `${localDateKey(rec.dt)}|${rec.total.toFixed(2)}`;
+          if (!idx[ck]) idx[ck] = {};
+          idx[ck][pkey] = (idx[ck][pkey] || 0) + 1;
+        }
+      }
+      return idx;
+    }
+
+    // นับว่า PDF items ตรงกับ plate key ไหนมากที่สุด
+    function matchPDFByTransactions(pdfItems, csvIndex) {
+      const score = {};
+      for (const item of pdfItems) {
+        const ck = `${item.dateKey}|${item.total.toFixed(2)}`;
+        if (csvIndex[ck]) {
+          for (const pk of Object.keys(csvIndex[ck])) {
+            score[pk] = (score[pk] || 0) + 1;
+          }
+        }
+      }
+      let best = null, bestScore = 0;
+      for (const [pk, s] of Object.entries(score)) {
+        if (s > bestScore) { bestScore = s; best = pk; }
+      }
+      return { key: best, score: bestScore };
+    }
+
     if (pdfFiles) {
+      const csvIndex = buildCSVIndex(plateData);
+
       for (const f of pdfFiles) {
-        const { plate, items } = await parsePDF(f);
-        if (plate && items.length) {
-          const key = normPlate(plate);
-          (pdfByPlate[key] = pdfByPlate[key] || []).push(...items);
+        const { plate: rawPlate, items } = await parsePDF(f);
+
+        if (!items.length) {
+          failedPDFs.push(`${f.name} — ไม่พบรายการผ่านทางในไฟล์`);
+          continue;
+        }
+
+        let assignedKey = null;
+        let matchMethod = '';
+
+        // วิธี 1: ทะเบียนใน PDF header ตรงกับ plate ใน CSV พอดี
+        if (rawPlate) {
+          const k = normPlate(rawPlate);
+          if (plateData[k]) { assignedKey = k; matchMethod = 'header'; }
+        }
+
+        // วิธี 2: เปรียบเทียบรายการ (date+total) กับทุก plate ใน CSV
+        if (!assignedKey) {
+          const { key, score } = matchPDFByTransactions(items, csvIndex);
+          if (score > 0) {
+            assignedKey = key;
+            matchMethod = `รายการตรง ${score}/${items.length}`;
+          }
+        }
+
+        if (assignedKey) {
+          (pdfByPlate[assignedKey] = pdfByPlate[assignedKey] || []).push(...items);
+          matchLog.push({
+            file: f.name,
+            plate: plateData[assignedKey].plate,
+            rawPlate: rawPlate || '—',
+            method: matchMethod,
+          });
+          console.log(`[PDF→plate] ${f.name} → ${plateData[assignedKey].plate} (${matchMethod})`);
         } else {
-          failedPDFs.push(f.name);
+          failedPDFs.push(`${f.name} — จับคู่ทะเบียนไม่ได้ (rawPlate: ${rawPlate || 'ไม่พบ'})`);
         }
       }
     }
-    // ── เปรียบเทียบทะเบียนระหว่าง CSV และ PDF (จากข้อมูลในไฟล์ทั้งหมด ไม่ใช่ชื่อไฟล์)
+
+    // ── สรุปการจับคู่
     const csvPlates = Object.keys(plateData);
     const pdfPlates = Object.keys(pdfByPlate);
-    const matched = csvPlates.filter(k => pdfPlates.includes(k)).map(k => plateData[k].plate);
+    const matched = csvPlates.filter(k => pdfPlates.includes(k)).map(k => {
+      const log = matchLog.find(l => normPlate(l.plate) === k);
+      return plateData[k].plate + (log ? ` ← ${log.file} (${log.method})` : '');
+    });
     const csvOnly = csvPlates.filter(k => !pdfPlates.includes(k)).map(k => plateData[k].plate);
     const pdfOnly = pdfPlates.filter(k => !csvPlates.includes(k)).map(k => k);
     showSummary(matched, csvOnly, pdfOnly, failedPDFs);
